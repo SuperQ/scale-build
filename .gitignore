@@ -3,3 +3,6 @@
 /sources/
 /tmp/
 /.buildEpoch
+conf/root/.zshrc
+conf/root/.zsh_history
+conf/root/.oh-my-zsh

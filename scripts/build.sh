@@ -68,6 +68,10 @@ export CONFIG_LOCALVERSION="+truenas"
 # Never go full interactive on any packages#
 export DEBIAN_FRONTEND="noninteractive"
 
+if [ -n "${PKG_SOURCE}" ] ; then
+	PKG_DEBUG=1;
+fi
+
 # Source helper functions
 . scripts/functions.sh
 
@@ -160,6 +164,13 @@ make_bootstrapdir() {
 	mount proc ${CHROOT_BASEDIR}/proc -t proc
 	mount sysfs ${CHROOT_BASEDIR}/sys -t sysfs
 	mount --bind ${CACHE_DIR}/apt ${CHROOT_BASEDIR}/var/cache/apt || exit_err "Failed mount --bind /var/cache/apt"
+	echo "Setting up apt-cacher"
+	echo 'Acquire::http::Proxy "http://192.168.0.3:3142";' > ${CHROOT_BASEDIR}/etc/apt/apt.conf.d/02proxy || exit_err "Failed to setup apt-cacher"
+	echo "Adding ssh key to authorized file"
+	mkdir ${CHROOT_BASEDIR}/root/.ssh
+	echo "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQClkokvZ7Rq75GcOvP65xlubdkMY3Ob81cNrsVg7dDJ/xJ5dmWDvEIpBelTskKDUyBrpcteq6RkmAomNvRe0M4I80syELRtlJULtfKBuA5bM0DXAd1+3kjVAi/VqH+7fNKxbMMZN1u3MaCbW31S3Hk3WMIYbZnkgfXmXauPfA6bWf6pKmpAVIezfUqbEaQRktbDzPb4G0pZmZs8N4hf8dxWnaRn0BRhRx/EUpCtgE+A0ESy1ZTN7SpsSlTYeqUx+PphSURnY+oNmwLR1ZsKqRiv69rmKBUZBOUH0vGvX6EFbcWPp/wJjsGeMrMI1hAyUuDoHEMZDPZgnycuS1HtfDTd waqar@Waqar's-mbp" >> ${CHROOT_BASEDIR}/root/.ssh/authorized_keys
+
+	echo "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCrzF/xK6YVa0EEa9NFfJIHQyUq2VWSakHdQmvHyKiMxRm5MQ+2I/XdBw+QRAPEUThcCCC/1+Xb4YBHKWF1yIKMlvim2r1cuJgN+LlIJro9H/DjLcSCqZwp8WoDte7zEIpI36u2YNErH/bXDV3pMW/etXtL4KtLLUcHY8FjNzDXlsQZjVNiKMQk9c9tX8LmegOyLqa4j3Eyk30EqqZrKSthVs3NOuX+yVWeYmYW7srjnbMP+Iz3qkP0b3bTlomtQTZNME4bXmRti00u/bhq7YWR+G/2IcWHpVoAI3mUU2cR8u+WpNrYHJ1ocLogOKeVqYcxjr4zx96ADrC+kMwQwdPzF3fNdV1j99O7b+rmuRyBTTzWRepLuqlQAecY8+XB+OGpetk1VNuNocUzdwQZe1kPrmMsX5Kb29PjaA9V+lhpOdh0qce3YfhxrGh2+rNbpukIk6gZ6nU8TxfCO/j8mBFd4rF9xS+cYMuB/HUcpiAsea0PNXPnm9hUGH+i3SAbXM0= root@truenas.local" >> ${CHROOT_BASEDIR}/root/.ssh/authorized_keys
 
 	if [ -z "$CDBUILD" ] ; then
 		# Add extra packages for builds
@@ -663,6 +674,11 @@ build_normal_dpkg() {
 		exit_err "Failed to build packages"
 	fi
 
+	if [ -n "${PKG_SOURCE}" ]; then
+		echo "Falling to shell"
+		chroot ${DPKG_OVERLAY} /bin/bash
+	fi
+
 	# Move out the resulting packages
 	echo "Copying finished packages"
 
@@ -760,7 +776,6 @@ update_git_repo() {
 	GHBRANCH="$2"
 	REPO="$3"
 	echo "`date`: Updating git repo [${NAME}] (${LOG_DIR}/git-checkout.log)"
-	(cd ${SOURCES}/${NAME} && git fetch --unshallow) >${LOG_DIR}/git-checkout.log 2>&1
 	(cd ${SOURCES}/${NAME} && git fetch origin ${GHBRANCH}) >${LOG_DIR}/git-checkout.log 2>&1 || exit_err "Failed git fetch"
 	(cd ${SOURCES}/${NAME} && git reset --hard origin/${GHBRANCH}) >${LOG_DIR}/git-checkout.log 2>&1 || exit_err "Failed git reset"
 }
@@ -771,12 +786,15 @@ checkout_git_repo() {
 	REPO="$3"
 	echo "`date`: Checking out git repo [${NAME}] (${LOG_DIR}/git-checkout.log)"
 
-	# Cleanup old dir, if it exists
+	# Checkout branch and update the branch if repo exists
 	if [ -d "${SOURCES}/${NAME}" ] ; then
-		rm -r ${SOURCES}/${NAME}
+		git -C ${SOURCES}/${NAME} fetch origin || exit_err "Failed to git fetch origin"
+		git -C ${SOURCES}/${NAME} checkout ${GHBRANCH} >${LOG_DIR}/git-checkout.log 2>&1 || exit_err "Failed to checkout branch ${GHBRANCH}"
+		update_git_repo "${NAME}" "${GHBRANCH}" "${REPO}"
+	else
+		git clone ${REPO} ${SOURCES}/${NAME} >${LOG_DIR}/git-checkout.log 2>&1 || exit_err "Failed checkout of ${REPO}"
+		git -C ${SOURCES}/${NAME} checkout ${GHBRANCH} >${LOG_DIR}/git-checkout.log 2>&1 || exit_err "Failed to checkout branch ${GHBRANCH}"
 	fi
-	git clone --depth=1 -b ${GHBRANCH} ${REPO} ${SOURCES}/${NAME} \
-		>${LOG_DIR}/git-checkout.log 2>&1 || exit_err "Failed checkout of ${REPO}"
 }
 
 install_iso_packages() {
@@ -795,6 +813,7 @@ install_iso_packages() {
 
 	#chroot ${CHROOT_BASEDIR} /bin/bash
 	mkdir -p ${CHROOT_BASEDIR}/boot/grub
+	mkdir -p /etc/apt-cacher-ng
 	cp scripts/grub.cfg ${CHROOT_BASEDIR}/boot/grub/grub.cfg || exit_err "Failed copying grub.cfg"
 	umount -f ${CHROOT_BASEDIR}/packages
 	umount -f ${CHROOT_BASEDIR}/proc
@@ -915,6 +934,21 @@ install_rootfs_packages() {
 
 	# Copy the default sources.list file
 	cp conf/sources.list ${CHROOT_BASEDIR}/etc/apt/sources.list || exit_err "Failed installing sources.list"
+
+	# Copy acng conf
+	mkdir -p ${CHROOT_BASEDIR}/etc/apt-cacher-ng/
+	cp conf/acng.conf ${CHROOT_BASEDIR}/etc/apt-cacher-ng/ || exit_err "Failed copying acng conf"
+
+	# Copy locale gen
+	cp conf/locale.gen ${CHROOT_BASEDIR}/etc/ || exit_err "Failed copying locale.gen"
+	chroot ${CHROOT_BASEDIR} locale-gen || exit_err "Failed genearting locale-gen"
+
+  # Copy root directory contents
+  cp -a conf/root/* ${CHROOT_BASEDIR}/root/ || exit_err "Failed copying root directory contents"
+  cp -a conf/root/.zshrc ${CHROOT_BASEDIR}/root/ || exit_err "Failed copying zshrc contents"
+  cp -a conf/root/.oh-my-zsh ${CHROOT_BASEDIR}/root/ || exit_err "Failed copying oh_my_zsh contents"
+  cp -a conf/root/.zsh_history ${CHROOT_BASEDIR}/root/ || exit_err "Failed copying zshrc history contents"
+  chown -R root:root ${CHROOT_BASEDIR}/root/.zshrc ${CHROOT_BASEDIR}/root/.oh-my-zsh ${CHROOT_BASEDIR}/root/.zsh_history || exit_err "Failed chown"
 
 	#chroot ${CHROOT_BASEDIR} /bin/bash
 	chroot ${CHROOT_BASEDIR} depmod

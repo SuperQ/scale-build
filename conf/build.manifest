@@ -63,6 +63,7 @@ base-packages:
 - ifstat
 - nvidia-kernel-dkms
 - nslcd
+- apt-cacher-ng
 - nvidia-container-toolkit
 - nvidia-smi
 - openzfs
@@ -81,6 +82,15 @@ base-packages:
 - wireguard-dkms
 - wireguard-tools
 - zfs-test
+- build-essential
+- locales
+- debootstrap
+- xorriso
+- grub-common
+- grub-efi-amd64-bin
+- grub-pc-bin mtools
+- squashfs-tools
+- unzip
 - zfs-initramfs
 
 #
